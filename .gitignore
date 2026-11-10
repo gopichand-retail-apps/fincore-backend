@@ -10,3 +10,8 @@ target/
 *.trace.db
 .DS_Store
 *.war
+
+# Local deployment metadata and private environment overrides
+.vercel/
+!.env.vercel.example
+node_modules/

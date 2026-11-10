@@ -1,5 +1,19 @@
 # FinCore Backend
 
+[Architecture guide](docs/architecture.md) — source map, workflows, contracts, data, security, and checks.
+
+## Repository layout and deployment boundary
+
+This independent repository owns FinCore's Spring Boot / Java 17 API and authoritative H2 state. The UI is the separate [fincore-frontend](https://github.com/gopichand-retail-apps/fincore-frontend) repository. Keep the current directory names, Git histories, origins, and independent builds.
+
+The Vercel configuration belongs to the frontend only. This API has no verified Vercel deployment adapter. Run the Java service on a suitable separate host; no Java runtime configuration is invented here. The local file database is not shared durable storage for stateless function instances. Do not deploy the local simulator as a public API or point it at real records.
+
+Use Java 17 and Maven; the POM is the dependency authority. From the full Retail Apps workspace, `./scripts/Start-Apps.ps1 -App FinCore` uses the correct built/native entry after setup. From this repository alone, the documented Maven command below starts the service.
+
+Health: http://127.0.0.1:5502/health. Direct startup stores data under `.local/fincore`; the workspace launcher can select a separate app-owned path. The [API contract](docs/openapi.yaml) and [canonical architecture](docs/architecture.md) describe the existing routes and trust boundaries. The architecture guide is inside this repository.
+
+Known release gaps: No bank connection or real funds. Model-failure recovery, a role-error translation, real identity, hosted database recovery, and deployment remain open.
+
 Spring Boot API for the FinCore synthetic banking simulator. This backend is a standalone repository from `fincore-frontend`.
 
 ## Run locally
