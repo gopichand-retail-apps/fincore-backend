@@ -1,0 +1,855 @@
+openapi: 3.1.0
+info:
+  title: FinCore Local API
+  version: 1.0.0
+  description: >-
+    Local-only synthetic banking API. The frontend's per-tab `isMock` value selects the source of
+    sign-in profile choices: the existing content model when true (the default), or
+    `/auth/demo-profiles` when false. It is not an authentication signal. Both paths use the
+    server-managed local session, and accounts, balances, transfers, and ledger state remain
+    backend-owned. No external identity provider or real-money service is connected.
+servers:
+  - url: /api/v1
+    description: Same-origin frontend proxy to the loopback API
+security:
+  - sessionCookie: []
+paths:
+  /version:
+    get:
+      operationId: getApplicationVersion
+      summary: Read the backend artifact version
+      security: []
+      responses:
+        "200":
+          description: API service name and SemVer release from the Maven build.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [service, version]
+                properties:
+                  service: { type: string, const: fincore-api }
+                  version: { type: string, pattern: '^\\d+\\.\\d+\\.\\d+$' }
+  /auth/csrf:
+    get:
+      operationId: getCsrfToken
+      summary: Obtain the CSRF token for a state-changing request
+      security: []
+      responses:
+        "200":
+          description: CSRF token and required request header name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CsrfResponse"
+  /auth/demo-profiles:
+    get:
+      operationId: listDemoProfiles
+      summary: List available synthetic profile choices
+      description: Available only in the local and test Spring profiles; contains no real identities.
+      security: []
+      responses:
+        "200":
+          description: Current profile keys and roles loaded from the backend seed database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoProfilesResponse"
+  /auth/demo-login:
+    post:
+      operationId: createDemoSession
+      summary: Create a server-managed session for an available synthetic profile
+      description: The server resolves the submitted key against its local profile records; role and user ID are never client-authoritative.
+      security:
+        - csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DemoLoginRequest"
+      responses:
+        "200":
+          description: Authenticated user; the server establishes the session cookie
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "404":
+          $ref: "#/components/responses/DemoProfileNotFound"
+        "403":
+          $ref: "#/components/responses/AccessDenied"
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      summary: Read the current server session
+      responses:
+        "200":
+          description: Current synthetic user and server-assigned role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Invalidate the current server session
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      responses:
+        "200":
+          description: Session invalidated
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/AccessDenied"
+  /overview:
+    get:
+      operationId: getOverview
+      summary: Read the authenticated user's overview
+      responses:
+        "200":
+          description: Server-calculated totals and visible account activity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OverviewResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+  /accounts:
+    get:
+      operationId: listAccounts
+      summary: List accounts visible to the authenticated user
+      description: Customers receive owned accounts; operations and auditor profiles receive synthetic aggregate records.
+      responses:
+        "200":
+          description: Backend-owned account records and balances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountListResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+  /accounts/{accountId}:
+    get:
+      operationId: getAccount
+      summary: Read one visible account
+      parameters:
+        - $ref: "#/components/parameters/AccountId"
+      responses:
+        "200":
+          description: Account details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "404":
+          $ref: "#/components/responses/AccountNotFound"
+  /accounts/{accountId}/transactions:
+    get:
+      operationId: listAccountTransactions
+      summary: List ledger entries for one visible account
+      parameters:
+        - $ref: "#/components/parameters/AccountId"
+        - name: limit
+          in: query
+          required: false
+          description: Requested rows are clamped by the API to the range 1–100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Newest ledger entries first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LedgerEntryResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "404":
+          $ref: "#/components/responses/AccountNotFound"
+  /statements:
+    get:
+      operationId: getStatement
+      summary: Read a monthly statement for a visible account
+      parameters:
+        - name: accountId
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 80
+        - name: month
+          in: query
+          required: true
+          description: UTC statement month in YYYY-MM format.
+          schema:
+            type: string
+            pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$"
+      responses:
+        "200":
+          description: Server-derived opening and closing balances with ledger entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatementResponse"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "404":
+          $ref: "#/components/responses/AccountNotFound"
+  /insights:
+    get:
+      operationId: getInsights
+      summary: Read last-30-day insights for one visible account
+      parameters:
+        - name: accountId
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 80
+      responses:
+        "200":
+          description: Server-derived income, spending, and category totals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InsightsResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "404":
+          $ref: "#/components/responses/AccountNotFound"
+  /beneficiaries:
+    get:
+      operationId: listBeneficiaries
+      summary: List active beneficiaries owned by the current customer
+      responses:
+        "200":
+          description: Owner-scoped beneficiaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BeneficiaryListResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/CustomerRoleRequired"
+    post:
+      operationId: addBeneficiary
+      summary: Add a synthetic recipient for the current customer
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddBeneficiaryRequest"
+      responses:
+        "201":
+          description: Beneficiary created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BeneficiaryResponse"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/CustomerRoleRequired"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /beneficiaries/directory:
+    get:
+      operationId: listRecipientDirectory
+      summary: List synthetic recipient accounts available to the current customer
+      responses:
+        "200":
+          description: Masked, eligible recipient accounts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecipientDirectoryResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/CustomerRoleRequired"
+  /beneficiaries/{beneficiaryId}:
+    delete:
+      operationId: removeBeneficiary
+      summary: Deactivate an owned beneficiary
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - name: beneficiaryId
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 80
+      responses:
+        "204":
+          description: Beneficiary deactivated
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/CustomerRoleRequired"
+        "404":
+          $ref: "#/components/responses/BeneficiaryNotFound"
+  /transfers:
+    get:
+      operationId: listTransfers
+      summary: List transfers visible to the authenticated user
+      description: Customers receive their own transfers; operations and auditor profiles receive the latest synthetic transfers.
+      responses:
+        "200":
+          description: Backend-owned transfer records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferListResponse"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+    post:
+      operationId: createTransfer
+      summary: Post an internal synthetic ledger transfer
+      description: The API validates ownership, saved-recipient authorization, funds, idempotency, and posts both ledger entries atomically. No real money moves.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9._:-]{16,128}$"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferRequest"
+      responses:
+        "200":
+          description: Completed transfer; duplicate indicates an idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferResponse"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/CustomerRoleRequired"
+        "404":
+          description: Source account is not owned, or destination is not an owned or saved account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "409":
+          $ref: "#/components/responses/Conflict"
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: JSESSIONID
+      description: Server-managed local demo session; not an external identity credential.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-TOKEN
+      description: Value returned by GET /auth/csrf.
+  parameters:
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 80
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 80
+    TraceId:
+      name: X-Trace-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 80
+  responses:
+    InvalidInput:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    AuthenticationRequired:
+      description: A valid server-managed session is required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    AccessDenied:
+      description: The request is not permitted
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    CustomerRoleRequired:
+      description: Only a customer session can perform this operation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    DemoProfileNotFound:
+      description: The synthetic profile key is not available in the server seed data
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    AccountNotFound:
+      description: Account does not exist or is not visible to this customer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    BeneficiaryNotFound:
+      description: Beneficiary does not exist or is not owned by this customer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    Conflict:
+      description: A business invariant or idempotency constraint was not satisfied
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+  schemas:
+    DemoRole:
+      type: string
+      enum:
+        - CUSTOMER
+        - OPERATIONS
+        - AUDITOR
+    DemoProfile:
+      type: object
+      required:
+        - demoAccount
+        - role
+      properties:
+        demoAccount:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: "^[A-Za-z0-9._:-]+$"
+        role:
+          $ref: "#/components/schemas/DemoRole"
+    DemoProfilesResponse:
+      type: object
+      required:
+        - profiles
+      properties:
+        profiles:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/DemoProfile"
+    DemoLoginRequest:
+      type: object
+      required:
+        - demoAccount
+      properties:
+        demoAccount:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: "^[A-Za-z0-9._:-]+$"
+    UserResponse:
+      type: object
+      required:
+        - id
+        - displayName
+        - role
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        role:
+          $ref: "#/components/schemas/DemoRole"
+    AuthResponse:
+      type: object
+      required:
+        - user
+      properties:
+        user:
+          $ref: "#/components/schemas/UserResponse"
+    CsrfResponse:
+      type: object
+      required:
+        - token
+        - headerName
+      properties:
+        token:
+          type: string
+        headerName:
+          type: string
+          const: X-CSRF-TOKEN
+    ApiErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+            - requestId
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            requestId:
+              type: string
+    AccountResponse:
+      type: object
+      required:
+        - id
+        - displayName
+        - type
+        - maskedAccountNumber
+        - currency
+        - balanceMinor
+        - status
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        type:
+          type: string
+          enum:
+            - CHECKING
+            - SAVINGS
+        maskedAccountNumber:
+          type: string
+        currency:
+          type: string
+          const: USD
+        balanceMinor:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - FROZEN
+        ownerDisplayName:
+          type: string
+    AccountListResponse:
+      type: object
+      required:
+        - accounts
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccountResponse"
+    LedgerEntryResponse:
+      type: object
+      required:
+        - id
+        - accountId
+        - category
+        - description
+        - amountMinor
+        - balanceAfterMinor
+        - createdAt
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        transferId:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        amountMinor:
+          type: integer
+          format: int64
+        balanceAfterMinor:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+    OverviewResponse:
+      type: object
+      required:
+        - totalBalanceMinor
+        - monthlyIncomeMinor
+        - monthlySpendMinor
+        - transferCount
+        - activeAccountCount
+        - accounts
+        - recentActivity
+      properties:
+        totalBalanceMinor:
+          type: integer
+          format: int64
+        monthlyIncomeMinor:
+          type: integer
+          format: int64
+        monthlySpendMinor:
+          type: integer
+          format: int64
+        transferCount:
+          type: integer
+          format: int64
+        activeAccountCount:
+          type: integer
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccountResponse"
+        recentActivity:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerEntryResponse"
+    InsightsResponse:
+      type: object
+      required:
+        - periodIncomeMinor
+        - periodSpendMinor
+        - categories
+      properties:
+        periodIncomeMinor:
+          type: integer
+          format: int64
+        periodSpendMinor:
+          type: integer
+          format: int64
+        categories:
+          type: array
+          items:
+            type: object
+            required:
+              - category
+              - amountMinor
+              - transactionCount
+            properties:
+              category:
+                type: string
+              amountMinor:
+                type: integer
+                format: int64
+              transactionCount:
+                type: integer
+    BeneficiaryResponse:
+      type: object
+      required:
+        - id
+        - alias
+        - destinationAccountId
+        - destinationAccountName
+        - maskedAccountNumber
+        - createdAt
+      properties:
+        id:
+          type: string
+        alias:
+          type: string
+        destinationAccountId:
+          type: string
+        destinationAccountName:
+          type: string
+        maskedAccountNumber:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    BeneficiaryListResponse:
+      type: object
+      required:
+        - beneficiaries
+      properties:
+        beneficiaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/BeneficiaryResponse"
+    RecipientOption:
+      type: object
+      required:
+        - accountId
+        - displayName
+        - accountName
+        - maskedAccountNumber
+      properties:
+        accountId:
+          type: string
+        displayName:
+          type: string
+        accountName:
+          type: string
+        maskedAccountNumber:
+          type: string
+    RecipientDirectoryResponse:
+      type: object
+      required:
+        - recipients
+      properties:
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecipientOption"
+    AddBeneficiaryRequest:
+      type: object
+      required:
+        - destinationAccountId
+        - alias
+      properties:
+        destinationAccountId:
+          type: string
+          minLength: 1
+          maxLength: 80
+        alias:
+          type: string
+          minLength: 2
+          maxLength: 80
+    TransferRequest:
+      type: object
+      required:
+        - sourceAccountId
+        - destinationAccountId
+        - amountMinor
+      properties:
+        sourceAccountId:
+          type: string
+          maxLength: 80
+        destinationAccountId:
+          type: string
+          maxLength: 80
+        amountMinor:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 25000000
+        memo:
+          type: string
+          maxLength: 120
+    TransferResponse:
+      type: object
+      required:
+        - id
+        - sourceAccountId
+        - sourceAccountName
+        - destinationAccountId
+        - destinationName
+        - amountMinor
+        - currency
+        - memo
+        - status
+        - createdAt
+        - duplicate
+      properties:
+        id:
+          type: string
+        sourceAccountId:
+          type: string
+        sourceAccountName:
+          type: string
+        destinationAccountId:
+          type: string
+        destinationName:
+          type: string
+        amountMinor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+          const: USD
+        memo:
+          type: string
+        status:
+          type: string
+          const: COMPLETED
+        createdAt:
+          type: string
+          format: date-time
+        duplicate:
+          type: boolean
+    TransferListResponse:
+      type: object
+      required:
+        - transfers
+      properties:
+        transfers:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransferResponse"
+    StatementResponse:
+      type: object
+      required:
+        - accountId
+        - accountName
+        - maskedAccountNumber
+        - month
+        - openingBalanceMinor
+        - closingBalanceMinor
+        - entries
+      properties:
+        accountId:
+          type: string
+        accountName:
+          type: string
+        maskedAccountNumber:
+          type: string
+        month:
+          type: string
+          pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$"
+        openingBalanceMinor:
+          type: integer
+          format: int64
+        closingBalanceMinor:
+          type: integer
+          format: int64
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerEntryResponse"

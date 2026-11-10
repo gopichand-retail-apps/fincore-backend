@@ -1,0 +1,12 @@
+target/
+.idea/
+.vscode/
+.local/
+*.log
+.env
+.env.*
+!.env.example
+*.mv.db
+*.trace.db
+.DS_Store
+*.war

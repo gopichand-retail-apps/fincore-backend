@@ -1,0 +1,15 @@
+spring:
+  datasource:
+    url: ${FINCORE_DB_URL:jdbc:postgresql://127.0.0.1:5432/fincore}
+    username: ${FINCORE_DB_USERNAME:fincore_app}
+    password: ${FINCORE_DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+fincore:
+  frontend-origins: ${FINCORE_FRONTEND_ORIGINS}
